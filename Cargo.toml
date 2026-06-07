@@ -1,0 +1,11 @@
+[package]
+name = "fractal-gen-rs"
+version = "0.1.0"
+edition = "2021"
+authors = ["SuperInstance"]
+description = "Fractal generation: Mandelbrot, Julia, Burning Ship, Sierpinski, Koch snowflake in pure Rust"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/SuperInstance/fractal-gen-rs"
+keywords = ["fractal", "mandelbrot", "julia", "burning-ship", "sierpinski"]
+categories = ["algorithms", "mathematics", "graphics"]
+readme = "README.md"
