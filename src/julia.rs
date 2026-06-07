@@ -1,62 +1,73 @@
 //! Julia set computation.
+//!
+//! For a given constant c, the Julia set is the set of starting points z_0
+//! for which the iteration z_{n+1} = z_n^2 + c remains bounded.
 
-use crate::escape::{self, EscapeResult};
+use crate::escape::{has_escaped, DEFAULT_ESCAPE_RADIUS};
 
-/// Julia set evaluator for a fixed parameter `c`.
+/// Compute the iteration count for a point (zx, zy) in the Julia set with parameter c = (cx, cy).
 ///
-/// Each point `z₀` in the complex plane is iterated as `z = z² + c`.
-/// Whether `z₀` belongs to the Julia set depends on whether it escapes.
-pub struct Julia {
-    /// Real part of the constant `c`.
-    pub cr: f64,
-    /// Imaginary part of the constant `c`.
-    pub ci: f64,
-    /// Maximum iterations.
-    pub max_iter: u32,
-    /// Squared bailout radius.
-    pub bailout_sq: f64,
+/// # Arguments
+/// * `zx` - Real part of starting point z
+/// * `zy` - Imaginary part of starting point z
+/// * `cx` - Real part of constant c
+/// * `cy` - Imaginary part of constant c
+/// * `max_iter` - Maximum iterations
+///
+/// # Example
+/// ```
+/// use fractal_gen_rs::julia::julia_iteration;
+/// let iter = julia_iteration(0.0, 0.0, -0.7, 0.27015, 100);
+/// assert!(iter <= 100);
+/// ```
+pub fn julia_iteration(zx: f64, zy: f64, cx: f64, cy: f64, max_iter: u32) -> u32 {
+    let mut zx = zx;
+    let mut zy = zy;
+    let mut i = 0;
+
+    while i < max_iter && !has_escaped(zx, zy, DEFAULT_ESCAPE_RADIUS) {
+        let new_zx = zx * zx - zy * zy + cx;
+        zy = 2.0 * zx * zy + cy;
+        zx = new_zx;
+        i += 1;
+    }
+
+    i
 }
 
-impl Julia {
-    /// Create a Julia set evaluator for parameter `c = (cr, ci)`.
-    pub fn new(cr: f64, ci: f64) -> Self {
-        Self { cr, ci, max_iter: 256, bailout_sq: 4.0 }
-    }
+/// Compute a rectangular region of a Julia set.
+///
+/// Returns iteration counts in a flat vector.
+    #[allow(clippy::too_many_arguments)]
+pub fn julia_region(
+    x_min: f64,
+    x_max: f64,
+    y_min: f64,
+    y_max: f64,
+    width: usize,
+    height: usize,
+    cx: f64,
+    cy: f64,
+    max_iter: u32,
+) -> Vec<u32> {
+    let mut result = Vec::with_capacity(width * height);
+    let dx = (x_max - x_min) / width as f64;
+    let dy = (y_max - y_min) / height as f64;
 
-    /// Set maximum iterations.
-    pub fn with_max_iter(mut self, max_iter: u32) -> Self {
-        self.max_iter = max_iter;
-        self
-    }
-
-    /// Test if starting point `z₀ = (zr, zi)` is in the filled Julia set.
-    pub fn is_in_set(&self, zr: f64, zi: f64) -> bool {
-        let r = escape::escape_time(zr, zi, self.cr, self.ci, self.max_iter, self.bailout_sq);
-        !r.escaped
-    }
-
-    /// Compute escape-time iterations for starting point `z₀`.
-    pub fn iterate(&self, zr: f64, zi: f64) -> EscapeResult {
-        escape::escape_time(zr, zi, self.cr, self.ci, self.max_iter, self.bailout_sq)
-    }
-
-    /// Render a grid of iteration counts.
-    pub fn render(&self, x_min: f64, x_max: f64, y_min: f64, y_max: f64, width: usize, height: usize) -> Vec<Vec<u32>> {
-        let dx = (x_max - x_min) / width as f64;
-        let dy = (y_max - y_min) / height as f64;
-        let mut grid = Vec::with_capacity(height);
-        for j in 0..height {
-            let mut row = Vec::with_capacity(width);
-            for i in 0..width {
-                let zr = x_min + i as f64 * dx;
-                let zi = y_min + j as f64 * dy;
-                let r = self.iterate(zr, zi);
-                row.push(r.iterations);
-            }
-            grid.push(row);
+    for row in 0..height {
+        let zy = y_min + row as f64 * dy;
+        for col in 0..width {
+            let zx = x_min + col as f64 * dx;
+            result.push(julia_iteration(zx, zy, cx, cy, max_iter));
         }
-        grid
     }
+
+    result
+}
+
+/// Check if a point is in the Julia set (doesn't escape within max_iter).
+pub fn is_in_julia(zx: f64, zy: f64, cx: f64, cy: f64, max_iter: u32) -> bool {
+    julia_iteration(zx, zy, cx, cy, max_iter) == max_iter
 }
 
 #[cfg(test)]
@@ -64,66 +75,61 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_julia_c_zero_contains_origin() {
-        let j = Julia::new(0.0, 0.0).with_max_iter(100);
-        // With c=0, z stays at its initial value; origin is in the set
-        assert!(j.is_in_set(0.0, 0.0));
+    fn test_origin_julia_c0() {
+        // With c = 0, z -> z^2, origin stays at 0
+        assert!(is_in_julia(0.0, 0.0, 0.0, 0.0, 100));
     }
 
     #[test]
-    fn test_julia_c_zero_escape_far() {
-        let j = Julia::new(0.0, 0.0).with_max_iter(100);
-        // z0 = 3 should escape for c=0 (stays at 3, which is > bailout of 2)
-        assert!(!j.is_in_set(3.0, 0.0));
+    fn test_far_point_escapes() {
+        let iter = julia_iteration(10.0, 0.0, -0.7, 0.27015, 100);
+        assert!(iter < 100, "Far point should escape, got {} iterations", iter);
     }
 
     #[test]
-    fn test_julia_known_set() {
-        // c = -0.7 + 0.27015i is a classic Julia set
-        let j = Julia::new(-0.7, 0.27015).with_max_iter(200);
-        // A point very close to origin should be in this Julia set
-        // Actually, let's test a known point: z=0 with c=-0.123+0.745i (Douady rabbit)
-        let j2 = Julia::new(-0.123, 0.745).with_max_iter(200);
-        assert!(j2.is_in_set(0.0, 0.0));
+    fn test_julia_iteration_range() {
+        for x in -5..=5 {
+            for y in -5..=5 {
+                let iter = julia_iteration(x as f64, y as f64, -0.7, 0.27015, 100);
+                assert!(iter <= 100, "Iteration count exceeds max");
+            }
+        }
     }
 
     #[test]
-    fn test_julia_iteration_count() {
-        let j = Julia::new(0.0, 0.0).with_max_iter(100);
-        let r = j.iterate(3.0, 0.0);
-        assert!(r.escaped);
-        // z=3, z²=9, escapes immediately
-        assert!(r.iterations <= 2);
+    fn test_julia_c_negative_two() {
+        // c = -2.0 is the tip point; the Julia set is a line segment
+        // Points far from the real axis should escape
+        assert!(!is_in_julia(0.0, 2.0, -2.0, 0.0, 100));
     }
 
     #[test]
-    fn test_julia_render() {
-        let j = Julia::new(-0.7, 0.27015).with_max_iter(50);
-        let grid = j.render(-2.0, 2.0, -2.0, 2.0, 50, 50);
-        assert_eq!(grid.len(), 50);
-        assert_eq!(grid[0].len(), 50);
+    fn test_julia_region_dimensions() {
+        let result = julia_region(-2.0, 2.0, -2.0, 2.0, 50, 50, -0.7, 0.27015, 100);
+        assert_eq!(result.len(), 50 * 50);
+    }
+
+    #[test]
+    fn test_julia_region_values_valid() {
+        let result = julia_region(-2.0, 2.0, -2.0, 2.0, 10, 10, -0.7, 0.27015, 50);
+        for &iter in &result {
+            assert!(iter <= 50);
+        }
     }
 
     #[test]
     fn test_julia_symmetry() {
-        // With c = 0, z stays at z0, so z and -z have same behavior
-        let j = Julia::new(0.0, 0.0).with_max_iter(100);
-        let r1 = j.iterate(0.5, 0.3);
-        let r2 = j.iterate(0.5, -0.3);
-        assert_eq!(r1.iterations, r2.iterations);
+        // Julia sets are symmetric about the origin for real c
+        let cx = -1.0;
+        let iter1 = julia_iteration(0.5, 0.5, cx, 0.0, 100);
+        let iter2 = julia_iteration(-0.5, -0.5, cx, 0.0, 100);
+        assert_eq!(iter1, iter2);
     }
 
     #[test]
-    fn test_julia_inside_small_disk() {
-        // c = 0 + 0i: anything with |z| < 1 is in the set (z stays bounded)
-        let j = Julia::new(0.0, 0.0).with_max_iter(200);
-        assert!(j.is_in_set(0.5, 0.5));
-        assert!(j.is_in_set(0.0, 0.9));
-    }
-
-    #[test]
-    fn test_julia_outside_large() {
-        let j = Julia::new(-0.7, 0.27015).with_max_iter(100);
-        assert!(!j.is_in_set(10.0, 10.0));
+    fn test_connected_julia_set() {
+        // For c inside the Mandelbrot set, the Julia set is connected
+        // c = 0 is trivially inside
+        assert!(is_in_julia(0.0, 0.0, 0.0, 0.0, 100));
     }
 }

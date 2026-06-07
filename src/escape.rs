@@ -1,93 +1,59 @@
-//! Escape-time algorithm: shared iteration logic for Mandelbrot, Julia, and Burning Ship.
+//! Escape-time algorithm utilities shared across fractal types.
+//!
+//! The escape-time algorithm iterates z = f(z, c) until |z| exceeds an escape radius
+//! or a maximum iteration count is reached.
 
-/// Result of an escape-time computation.
-#[derive(Clone, Copy, Debug)]
-pub struct EscapeResult {
-    /// Number of iterations before escape (or `max_iter` if it didn't escape).
-    pub iterations: u32,
-    /// Whether the point escaped (magnitude exceeded the bailout radius).
-    pub escaped: bool,
-    /// Final |z|² value (squared magnitude, avoids a sqrt).
-    pub final_magnitude_sq: f64,
+/// Default escape radius for most fractals.
+pub const DEFAULT_ESCAPE_RADIUS: f64 = 2.0;
+
+/// Compute the squared magnitude of a complex number (real, imag).
+#[inline]
+pub fn magnitude_squared(real: f64, imag: f64) -> f64 {
+    real * real + imag * imag
 }
 
-/// Run the standard escape-time iteration `z = z² + c` for complex values.
+/// Check if a point has escaped (|z| > escape_radius).
+#[inline]
+pub fn has_escaped(real: f64, imag: f64, escape_radius: f64) -> bool {
+    magnitude_squared(real, imag) > escape_radius * escape_radius
+}
+
+/// Smooth iteration count for continuous coloring.
+/// Uses the normalized iteration count algorithm.
 ///
-/// Starts at `zr, zi` and iterates with `cr, ci` until `|z|² > bailout_sq` or `max_iter` is reached.
-pub fn escape_time(
-    zr: f64,
-    zi: f64,
-    cr: f64,
-    ci: f64,
-    max_iter: u32,
-    bailout_sq: f64,
-) -> EscapeResult {
-    let mut zr = zr;
-    let mut zi = zi;
-    let mut i = 0u32;
-    let mut mag_sq = zr * zr + zi * zi;
-
-    while i < max_iter && mag_sq <= bailout_sq {
-        let new_zr = zr * zr - zi * zi + cr;
-        let new_zi = 2.0 * zr * zi + ci;
-        zr = new_zr;
-        zi = new_zi;
-        mag_sq = zr * zr + zi * zi;
-        i += 1;
-    }
-
-    EscapeResult {
-        iterations: i,
-        escaped: mag_sq > bailout_sq,
-        final_magnitude_sq: mag_sq,
+/// Returns a smooth floating-point iteration count.
+pub fn smooth_iteration(iteration: u32, max_iter: u32, real: f64, imag: f64) -> f64 {
+    if iteration >= max_iter {
+        max_iter as f64
+    } else {
+        let log_zn = (magnitude_squared(real, imag)).ln() / 2.0;
+        let nu = (log_zn / 2.0_f64.ln()).ln() / 2.0_f64.ln();
+        iteration as f64 + 1.0 - nu
     }
 }
 
-/// Run escape-time with the Burning Ship iteration: `z = (|Re(z)| + i|Im(z)|)² + c`.
-pub fn escape_time_burning_ship(
-    zr: f64,
-    zi: f64,
-    cr: f64,
-    ci: f64,
-    max_iter: u32,
-    bailout_sq: f64,
-) -> EscapeResult {
-    let mut zr = zr;
-    let mut zi = zi;
-    let mut i = 0u32;
-    let mut mag_sq = zr * zr + zi * zi;
-
-    while i < max_iter && mag_sq <= bailout_sq {
-        let ar = zr.abs();
-        let ai = zi.abs();
-        let new_zr = ar * ar - ai * ai + cr;
-        let new_zi = 2.0 * ar * ai + ci;
-        zr = new_zr;
-        zi = new_zi;
-        mag_sq = zr * zr + zi * zi;
-        i += 1;
-    }
-
-    EscapeResult {
-        iterations: i,
-        escaped: mag_sq > bailout_sq,
-        final_magnitude_sq: mag_sq,
+/// Map an iteration count to a grayscale value (0-255).
+pub fn iteration_to_grayscale(iteration: u32, max_iter: u32) -> u8 {
+    if iteration >= max_iter {
+        0 // Inside the set = black
+    } else {
+        // Simple linear mapping
+        ((iteration as f64 / max_iter as f64) * 255.0) as u8
     }
 }
 
-/// Compute smooth coloring value using normalized iteration count.
-///
-/// Returns a value in `[0.0, 1.0)` proportional to the iteration count,
-/// smoothed for visual quality. Returns `0.0` for interior points.
-pub fn smooth_color(result: EscapeResult, max_iter: u32) -> f64 {
-    if !result.escaped {
-        return 0.0;
+/// Map an iteration count to a color using a simple palette.
+/// Returns (r, g, b) values in 0-255 range.
+pub fn iteration_to_color(iteration: u32, max_iter: u32) -> (u8, u8, u8) {
+    if iteration >= max_iter {
+        (0, 0, 0)
+    } else {
+        let t = iteration as f64 / max_iter as f64;
+        let r = (9.0 * (1.0 - t) * t * t * t * 255.0) as u8;
+        let g = (15.0 * (1.0 - t) * (1.0 - t) * t * t * 255.0) as u8;
+        let b = (8.5 * (1.0 - t) * (1.0 - t) * (1.0 - t) * t * 255.0) as u8;
+        (r, g, b)
     }
-    // Normalized iteration count: n + 1 - log2(log2(|z|))
-    let log_zn = 0.5 * result.final_magnitude_sq.ln();
-    let nu = log_zn.ln() / (2.0_f64).ln();
-    let smooth = (result.iterations as f64 + 1.0 - nu) / max_iter as f64;
-    smooth.clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
@@ -95,56 +61,70 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_escape_origin() {
-        let r = escape_time(0.0, 0.0, 0.0, 0.0, 100, 4.0);
-        assert!(!r.escaped);
-        assert_eq!(r.iterations, 100);
+    fn test_magnitude_squared_zero() {
+        assert!((magnitude_squared(0.0, 0.0) - 0.0).abs() < 1e-10);
     }
 
     #[test]
-    fn test_escape_outside() {
-        let r = escape_time(0.0, 0.0, 10.0, 0.0, 100, 4.0);
-        assert!(r.escaped);
-        assert!(r.iterations < 5);
+    fn test_magnitude_squared_unit() {
+        assert!((magnitude_squared(1.0, 0.0) - 1.0).abs() < 1e-10);
+        assert!((magnitude_squared(0.0, 1.0) - 1.0).abs() < 1e-10);
     }
 
     #[test]
-    fn test_escape_known_mandelbrot_inside() {
-        // z=0, c=0 is in the Mandelbrot set
-        let r = escape_time(0.0, 0.0, 0.0, 0.0, 1000, 4.0);
-        assert!(!r.escaped);
+    fn test_magnitude_squared_345() {
+        // 3^2 + 4^2 = 25
+        assert!((magnitude_squared(3.0, 4.0) - 25.0).abs() < 1e-10);
     }
 
     #[test]
-    fn test_escape_known_mandelbrot_outside() {
-        // z=0, c=2+0i is outside the Mandelbrot set
-        let r = escape_time(0.0, 0.0, 2.0, 0.0, 100, 4.0);
-        assert!(r.escaped);
+    fn test_has_escaped_inside() {
+        assert!(!has_escaped(0.5, 0.5, 2.0));
     }
 
     #[test]
-    fn test_smooth_color_interior() {
-        let r = EscapeResult { iterations: 100, escaped: false, final_magnitude_sq: 2.0 };
-        assert_eq!(smooth_color(r, 100), 0.0);
+    fn test_has_escaped_outside() {
+        assert!(has_escaped(3.0, 0.0, 2.0));
     }
 
     #[test]
-    fn test_smooth_color_exterior() {
-        let r = EscapeResult { iterations: 50, escaped: true, final_magnitude_sq: 100.0 };
-        let v = smooth_color(r, 100);
-        assert!(v > 0.0 && v <= 1.0);
+    fn test_has_escaped_on_boundary() {
+        // |z| = 2.0 exactly, squared = 4.0, escape radius^2 = 4.0
+        // should NOT escape (strict >)
+        assert!(!has_escaped(2.0, 0.0, 2.0));
     }
 
     #[test]
-    fn test_burning_ship_inside() {
-        // Origin with c=0 should not escape
-        let r = escape_time_burning_ship(0.0, 0.0, 0.0, 0.0, 100, 4.0);
-        assert!(!r.escaped);
+    fn test_smooth_iteration_inside() {
+        let val = smooth_iteration(100, 100, 0.0, 0.0);
+        assert!((val - 100.0).abs() < 1e-10);
     }
 
     #[test]
-    fn test_burning_ship_outside() {
-        let r = escape_time_burning_ship(0.0, 0.0, 10.0, 10.0, 100, 4.0);
-        assert!(r.escaped);
+    fn test_smooth_iteration_outside() {
+        let val = smooth_iteration(10, 100, 3.0, 4.0);
+        assert!(val > 0.0 && val < 100.0);
+    }
+
+    #[test]
+    fn test_iteration_to_grayscale_inside() {
+        assert_eq!(iteration_to_grayscale(100, 100), 0);
+    }
+
+    #[test]
+    fn test_iteration_to_grayscale_escaped() {
+        let val = iteration_to_grayscale(50, 100);
+        assert!(val > 0);
+    }
+
+    #[test]
+    fn test_iteration_to_color_inside() {
+        assert_eq!(iteration_to_color(100, 100), (0, 0, 0));
+    }
+
+    #[test]
+    fn test_iteration_to_color_escaped() {
+        let (r, g, b) = iteration_to_color(50, 100);
+        assert!(r > 0 || g > 0 || b > 0);
     }
 }
